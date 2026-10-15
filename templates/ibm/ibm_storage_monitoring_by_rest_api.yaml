@@ -1,0 +1,948 @@
+zabbix_export:
+  version: '7.4'
+  template_groups:
+    - uuid: 2fe781f8da17495cb8768cdfb6400103
+      name: 'Templates/Empresa Corp'
+    - uuid: 826d046d9fb5461fa6b3670e23c870f5
+      name: Templates/Storage
+  templates:
+    - uuid: 76c29a52bee245f495956592d6ecbc10
+      template: 'IBM Storage Monitoring by REST API'
+      name: 'IBM Storage Monitoring by REST API'
+      description: 'Monitors IBM Storage Virtualize systems through the classic REST API (/rest/auth and /rest/*), validated against IBM FlashSystem 5000 running code level 8.4.0.6. Uses one Script master item, dependent items and low-level discovery for nodes, enclosures, drives, pools and Fibre Channel ports.'
+      vendor:
+        name: Custom
+        version: '1.0'
+      groups:
+        - name: 'Templates/Empresa Corp'
+        - name: Templates/Storage
+      items:
+        - uuid: 6f1bb8c095e746cb83668d9f06dc92dd
+          name: 'IBM Storage: Get data'
+          type: SCRIPT
+          key: ibm.storage.get
+          delay: 5m
+          history: 1d
+          value_type: TEXT
+          params: |
+            var p = JSON.parse(value);
+            
+            function required(name) {
+                if (typeof p[name] === 'undefined' || p[name] === '' ||
+                        p[name] === '{$IBM.API.' + name.toUpperCase() + '}') {
+                    throw 'Missing required parameter: ' + name;
+                }
+            }
+            
+            required('url');
+            required('username');
+            required('password');
+            
+            var base = p.url.replace(/\/+$/, '');
+            var endpoints = {
+                system: '/lssystem',
+                nodes: '/lsnode',
+                enclosures: '/lsenclosure',
+                drives: '/lsdrive',
+                pools: '/lsmdiskgrp',
+                fc_ports: '/lsportfc'
+            };
+            
+            function parseJson(body, endpoint) {
+                try {
+                    return JSON.parse(body);
+                }
+                catch (e) {
+                    throw 'Invalid JSON from ' + endpoint + ': ' + body;
+                }
+            }
+            
+            function checkStatus(req, body, endpoint) {
+                var status = req.getStatus();
+                if (status < 200 || status >= 300) {
+                    throw 'HTTP ' + status + ' from ' + endpoint + ': ' + body;
+                }
+            }
+            
+            function authenticate() {
+                var req = new HttpRequest();
+                 req.addHeader('Accept: application/json');
+                req.addHeader('X-Auth-Username: ' + p.username);
+                req.addHeader('X-Auth-Password: ' + p.password);
+            
+                var body = req.post(base + '/auth', '');
+                checkStatus(req, body, '/auth');
+            
+                var auth = parseJson(body, '/auth');
+                if (!auth.token) {
+                    throw 'Authentication response does not contain token';
+                }
+                return auth.token;
+            }
+            
+            function query(endpoint, token) {
+                var req = new HttpRequest();
+                req.addHeader('Accept: application/json');
+                req.addHeader('X-Auth-Token: ' + token);
+            
+                var body = req.post(base + endpoint, '');
+                checkStatus(req, body, endpoint);
+                return parseJson(body, endpoint);
+            }
+            
+            var token = authenticate();
+            var result = {
+                collected_at: Math.floor(Date.now() / 1000)
+            };
+            
+            for (var name in endpoints) {
+                result[name] = query(endpoints[name], token);
+            }
+            
+            return JSON.stringify(result);
+          description: 'Authenticates against /rest/auth and retrieves all datasets used by this template.'
+          timeout: '{$IBM.API.TIMEOUT}'
+          parameters:
+            - name: password
+              value: '{$IBM.API.PASSWORD}'
+            - name: url
+              value: '{$IBM.API.URL}'
+            - name: username
+              value: '{$IBM.API.USER}'
+          tags:
+            - tag: component
+              value: raw
+          triggers:
+            - uuid: 9e53c26520024aeeb953d8d0f666af63
+              expression: 'nodata(/IBM Storage Monitoring by REST API/ibm.storage.get,15m)=1'
+              name: 'IBM Storage: No REST API data for 15 minutes'
+              priority: HIGH
+              description: 'The master REST API item has not returned data.'
+              tags:
+                - tag: scope
+                  value: availability
+        - uuid: c0dade2cf38342d0acb4071aaf9774a7
+          name: 'IBM Storage: Code level'
+          type: DEPENDENT
+          key: ibm.storage.system.code_level
+          history: 30d
+          value_type: CHAR
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.system.code_level
+          master_item:
+            key: ibm.storage.get
+          tags:
+            - tag: component
+              value: system
+        - uuid: be2864a9247642438466583e14e7df05
+          name: 'IBM Storage: Email state'
+          type: DEPENDENT
+          key: ibm.storage.system.email_state
+          history: 30d
+          value_type: CHAR
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.system.email_state
+          master_item:
+            key: ibm.storage.get
+          tags:
+            - tag: component
+              value: system
+        - uuid: abcfca91588541d39987a06b1ab0596e
+          name: 'IBM Storage: System name'
+          type: DEPENDENT
+          key: ibm.storage.system.name
+          history: 30d
+          value_type: CHAR
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.system.name
+          master_item:
+            key: ibm.storage.get
+          tags:
+            - tag: component
+              value: system
+        - uuid: 6eae7fc3c0bb43448fb99089b1f7e550
+          name: 'IBM Storage: Physical capacity'
+          type: DEPENDENT
+          key: ibm.storage.system.physical_capacity
+          history: 30d
+          units: B
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.system.physical_capacity
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  var m = String(value).trim().match(/^([0-9]+(?:\.[0-9]+)?)\s*(B|KB|MB|GB|TB|PB)$/i);
+                  if (!m) {
+                      throw 'Unsupported IBM capacity format: ' + value;
+                  }
+                  var factor = {
+                      B: 1,
+                      KB: 1024,
+                      MB: 1024 * 1024,
+                      GB: 1024 * 1024 * 1024,
+                      TB: 1024 * 1024 * 1024 * 1024,
+                      PB: 1024 * 1024 * 1024 * 1024 * 1024
+                  };
+                  return Math.round(parseFloat(m[1]) * factor[m[2].toUpperCase()]);
+          master_item:
+            key: ibm.storage.get
+          tags:
+            - tag: component
+              value: system
+        - uuid: 45ea5bf7fdb04a7191ddc504bb295044
+          name: 'IBM Storage: Physical free capacity'
+          type: DEPENDENT
+          key: ibm.storage.system.physical_free_capacity
+          history: 30d
+          units: B
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.system.physical_free_capacity
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  var m = String(value).trim().match(/^([0-9]+(?:\.[0-9]+)?)\s*(B|KB|MB|GB|TB|PB)$/i);
+                  if (!m) {
+                      throw 'Unsupported IBM capacity format: ' + value;
+                  }
+                  var factor = {
+                      B: 1,
+                      KB: 1024,
+                      MB: 1024 * 1024,
+                      GB: 1024 * 1024 * 1024,
+                      TB: 1024 * 1024 * 1024 * 1024,
+                      PB: 1024 * 1024 * 1024 * 1024 * 1024
+                  };
+                  return Math.round(parseFloat(m[1]) * factor[m[2].toUpperCase()]);
+          master_item:
+            key: ibm.storage.get
+          tags:
+            - tag: component
+              value: system
+        - uuid: ac942335465c4edabf8d908a37b8a0f3
+          name: 'IBM Storage: Physical capacity utilization'
+          type: CALCULATED
+          key: ibm.storage.system.physical_utilization
+          delay: 5m
+          history: 90d
+          value_type: FLOAT
+          units: '%'
+          params: '100*(last(//ibm.storage.system.physical_capacity)-last(//ibm.storage.system.physical_free_capacity))/last(//ibm.storage.system.physical_capacity)'
+          description: 'Calculated physical capacity utilization.'
+          tags:
+            - tag: component
+              value: system
+        - uuid: 927b4b2058884f7b9ea95fd77fcb9963
+          name: 'IBM Storage: Product name'
+          type: DEPENDENT
+          key: ibm.storage.system.product
+          history: 30d
+          value_type: CHAR
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.system.product_name
+          master_item:
+            key: ibm.storage.get
+          tags:
+            - tag: component
+              value: system
+        - uuid: 112efa387aee4f718a5a6eaee138521f
+          name: 'IBM Storage: Statistics status'
+          type: DEPENDENT
+          key: ibm.storage.system.statistics_status
+          history: 30d
+          value_type: CHAR
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.system.statistics_status
+          master_item:
+            key: ibm.storage.get
+          tags:
+            - tag: component
+              value: system
+        - uuid: 51e13cf23571422d9630401bc448f8d6
+          name: 'IBM Storage: Total drive raw capacity'
+          type: DEPENDENT
+          key: ibm.storage.system.total_drive_raw_capacity
+          history: 30d
+          units: B
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.system.total_drive_raw_capacity
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  var m = String(value).trim().match(/^([0-9]+(?:\.[0-9]+)?)\s*(B|KB|MB|GB|TB|PB)$/i);
+                  if (!m) {
+                      throw 'Unsupported IBM capacity format: ' + value;
+                  }
+                  var factor = {
+                      B: 1,
+                      KB: 1024,
+                      MB: 1024 * 1024,
+                      GB: 1024 * 1024 * 1024,
+                      TB: 1024 * 1024 * 1024 * 1024,
+                      PB: 1024 * 1024 * 1024 * 1024 * 1024
+                  };
+                  return Math.round(parseFloat(m[1]) * factor[m[2].toUpperCase()]);
+          master_item:
+            key: ibm.storage.get
+          tags:
+            - tag: component
+              value: system
+        - uuid: 95c18ed5abb843c29e75e11a7270b534
+          name: 'IBM Storage: Total used capacity'
+          type: DEPENDENT
+          key: ibm.storage.system.total_used_capacity
+          history: 30d
+          units: B
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.system.total_used_capacity
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  var m = String(value).trim().match(/^([0-9]+(?:\.[0-9]+)?)\s*(B|KB|MB|GB|TB|PB)$/i);
+                  if (!m) {
+                      throw 'Unsupported IBM capacity format: ' + value;
+                  }
+                  var factor = {
+                      B: 1,
+                      KB: 1024,
+                      MB: 1024 * 1024,
+                      GB: 1024 * 1024 * 1024,
+                      TB: 1024 * 1024 * 1024 * 1024,
+                      PB: 1024 * 1024 * 1024 * 1024 * 1024
+                  };
+                  return Math.round(parseFloat(m[1]) * factor[m[2].toUpperCase()]);
+          master_item:
+            key: ibm.storage.get
+          tags:
+            - tag: component
+              value: system
+      discovery_rules:
+        - uuid: 2ac854c9dee748c9929fdf0d30d56997
+          name: 'IBM Storage: Drive discovery'
+          type: DEPENDENT
+          key: ibm.storage.drive.discovery
+          lifetime: 30d
+          item_prototypes:
+            - uuid: 84111e1b95104885b66536ce4d80737e
+              name: 'IBM Storage: Drive {#DRIVE.ID} slot {#DRIVE.SLOT}: Capacity'
+              type: DEPENDENT
+              key: 'ibm.storage.drive.capacity[{#DRIVE.ID}]'
+              history: 30d
+              units: B
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.drives[?(@.id=="{#DRIVE.ID}")].capacity.first()'
+                - type: JAVASCRIPT
+                  parameters:
+                    - |
+                      var m = String(value).trim().match(/^([0-9]+(?:\.[0-9]+)?)\s*(B|KB|MB|GB|TB|PB)$/i);
+                      if (!m) {
+                          throw 'Unsupported IBM capacity format: ' + value;
+                      }
+                      var factor = {
+                          B: 1,
+                          KB: 1024,
+                          MB: 1024 * 1024,
+                          GB: 1024 * 1024 * 1024,
+                          TB: 1024 * 1024 * 1024 * 1024,
+                          PB: 1024 * 1024 * 1024 * 1024 * 1024
+                      };
+                      return Math.round(parseFloat(m[1]) * factor[m[2].toUpperCase()]);
+              master_item:
+                key: ibm.storage.get
+              tags:
+                - tag: component
+                  value: drive
+            - uuid: c9af7c27f2024b5b9f1a4521e1461edb
+              name: 'IBM Storage: Drive {#DRIVE.ID} slot {#DRIVE.SLOT}: Error sequence'
+              type: DEPENDENT
+              key: 'ibm.storage.drive.error_sequence[{#DRIVE.ID}]'
+              history: 30d
+              value_type: CHAR
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.drives[?(@.id=="{#DRIVE.ID}")].error_sequence_number.first()'
+              master_item:
+                key: ibm.storage.get
+              tags:
+                - tag: component
+                  value: drive
+            - uuid: 4af241851cd045d88047706c3579fe28
+              name: 'IBM Storage: Drive {#DRIVE.ID} slot {#DRIVE.SLOT}: Status'
+              type: DEPENDENT
+              key: 'ibm.storage.drive.status[{#DRIVE.ID}]'
+              history: 30d
+              value_type: CHAR
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.drives[?(@.id=="{#DRIVE.ID}")].status.first()'
+              master_item:
+                key: ibm.storage.get
+              tags:
+                - tag: component
+                  value: drive
+            - uuid: da8b1a590aad419999f3c55ed10e1e3e
+              name: 'IBM Storage: Drive {#DRIVE.ID} slot {#DRIVE.SLOT}: Use'
+              type: DEPENDENT
+              key: 'ibm.storage.drive.use[{#DRIVE.ID}]'
+              history: 30d
+              value_type: CHAR
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.drives[?(@.id=="{#DRIVE.ID}")].use.first()'
+              master_item:
+                key: ibm.storage.get
+              tags:
+                - tag: component
+                  value: drive
+          trigger_prototypes:
+            - uuid: d21239ee44d842c88c2a741b8703e537
+              expression: 'last(/IBM Storage Monitoring by REST API/ibm.storage.drive.status[{#DRIVE.ID}])<>"online" or last(/IBM Storage Monitoring by REST API/ibm.storage.drive.use[{#DRIVE.ID}])="failed"'
+              name: 'IBM Storage: Drive {#DRIVE.ID} in enclosure {#DRIVE.ENCLOSURE}, slot {#DRIVE.SLOT} has failed'
+              priority: DISASTER
+              description: 'Drive status is not online or IBM reports its use as failed.'
+              tags:
+                - tag: scope
+                  value: availability
+          master_item:
+            key: ibm.storage.get
+          lld_macro_paths:
+            - lld_macro: '{#DRIVE.ENCLOSURE}'
+              path: $.enclosure_id
+            - lld_macro: '{#DRIVE.ID}'
+              path: $.id
+            - lld_macro: '{#DRIVE.MDISK}'
+              path: $.mdisk_name
+            - lld_macro: '{#DRIVE.SLOT}'
+              path: $.slot_id
+            - lld_macro: '{#DRIVE.TECH}'
+              path: $.tech_type
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.drives
+        - uuid: 01408af20987476a95deafab5644edae
+          name: 'IBM Storage: Enclosure discovery'
+          type: DEPENDENT
+          key: ibm.storage.enclosure.discovery
+          lifetime: 30d
+          item_prototypes:
+            - uuid: 821fae6b0b6746f6905809b39c337eba
+              name: 'IBM Storage: Enclosure {#ENC.ID}: Online canisters'
+              type: DEPENDENT
+              key: 'ibm.storage.enclosure.canisters.online[{#ENC.ID}]'
+              history: 30d
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.enclosures[?(@.id=="{#ENC.ID}")].online_canisters.first()'
+              master_item:
+                key: ibm.storage.get
+              tags:
+                - tag: component
+                  value: enclosure
+            - uuid: 6f633607f6ea49548906fa9926c80d4c
+              name: 'IBM Storage: Enclosure {#ENC.ID}: Total canisters'
+              type: DEPENDENT
+              key: 'ibm.storage.enclosure.canisters.total[{#ENC.ID}]'
+              history: 30d
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.enclosures[?(@.id=="{#ENC.ID}")].total_canisters.first()'
+              master_item:
+                key: ibm.storage.get
+              tags:
+                - tag: component
+                  value: enclosure
+            - uuid: 8af92b0cc94b44e3a41fb00ac4a008c7
+              name: 'IBM Storage: Enclosure {#ENC.ID}: Online PSUs'
+              type: DEPENDENT
+              key: 'ibm.storage.enclosure.psu.online[{#ENC.ID}]'
+              history: 30d
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.enclosures[?(@.id=="{#ENC.ID}")].online_PSUs.first()'
+              master_item:
+                key: ibm.storage.get
+              tags:
+                - tag: component
+                  value: enclosure
+            - uuid: 443bb4425f0c419a81ad3e685557fecf
+              name: 'IBM Storage: Enclosure {#ENC.ID}: Total PSUs'
+              type: DEPENDENT
+              key: 'ibm.storage.enclosure.psu.total[{#ENC.ID}]'
+              history: 30d
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.enclosures[?(@.id=="{#ENC.ID}")].total_PSUs.first()'
+              master_item:
+                key: ibm.storage.get
+              tags:
+                - tag: component
+                  value: enclosure
+            - uuid: 53192b23f75d4ff6ad8d2a50542120d5
+              name: 'IBM Storage: Enclosure {#ENC.ID}: Status'
+              type: DEPENDENT
+              key: 'ibm.storage.enclosure.status[{#ENC.ID}]'
+              history: 30d
+              value_type: CHAR
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.enclosures[?(@.id=="{#ENC.ID}")].status.first()'
+              master_item:
+                key: ibm.storage.get
+              tags:
+                - tag: component
+                  value: enclosure
+              trigger_prototypes:
+                - uuid: 12d0879450414b95bcba8adc759f8998
+                  expression: 'last(/IBM Storage Monitoring by REST API/ibm.storage.enclosure.status[{#ENC.ID}])<>"online"'
+                  name: 'IBM Storage: Enclosure {#ENC.ID} is not online'
+                  priority: HIGH
+                  tags:
+                    - tag: scope
+                      value: availability
+          trigger_prototypes:
+            - uuid: beae2b1040514c568fc09e9e11f6840e
+              expression: 'last(/IBM Storage Monitoring by REST API/ibm.storage.enclosure.canisters.online[{#ENC.ID}])<last(/IBM Storage Monitoring by REST API/ibm.storage.enclosure.canisters.total[{#ENC.ID}])'
+              name: 'IBM Storage: Enclosure {#ENC.ID} has an offline canister'
+              priority: HIGH
+              tags:
+                - tag: scope
+                  value: availability
+            - uuid: facff297b55545f48d5523917ede199d
+              expression: 'last(/IBM Storage Monitoring by REST API/ibm.storage.enclosure.psu.online[{#ENC.ID}])<last(/IBM Storage Monitoring by REST API/ibm.storage.enclosure.psu.total[{#ENC.ID}])'
+              name: 'IBM Storage: Enclosure {#ENC.ID} has an offline PSU'
+              priority: HIGH
+              tags:
+                - tag: scope
+                  value: availability
+          master_item:
+            key: ibm.storage.get
+          lld_macro_paths:
+            - lld_macro: '{#ENC.ID}'
+              path: $.id
+            - lld_macro: '{#ENC.SERIAL}'
+              path: $.serial_number
+            - lld_macro: '{#ENC.TYPE}'
+              path: $.type
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.enclosures
+        - uuid: f36caac273214630b8a22713dc06ac71
+          name: 'IBM Storage: Fibre Channel port discovery'
+          type: DEPENDENT
+          key: ibm.storage.fc.discovery
+          lifetime: 30d
+          item_prototypes:
+            - uuid: faeb0b25bfdb4229a1f2a5af88ca6f0d
+              name: 'IBM Storage: FC {#FC.NODE} port {#FC.PORT}: Attachment'
+              type: DEPENDENT
+              key: 'ibm.storage.fc.attachment[{#FC.ID}]'
+              history: 30d
+              value_type: CHAR
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.fc_ports[?(@.id=="{#FC.ID}")].attachment.first()'
+              master_item:
+                key: ibm.storage.get
+              tags:
+                - tag: component
+                  value: fc
+            - uuid: adf271dd307c4de09b70aefd291b4aaa
+              name: 'IBM Storage: FC {#FC.NODE} port {#FC.PORT}: Speed'
+              type: DEPENDENT
+              key: 'ibm.storage.fc.speed[{#FC.ID}]'
+              history: 30d
+              value_type: CHAR
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.fc_ports[?(@.id=="{#FC.ID}")].port_speed.first()'
+              master_item:
+                key: ibm.storage.get
+              tags:
+                - tag: component
+                  value: fc
+            - uuid: 66ac195de02543e9925ce2d8a2bdbaaf
+              name: 'IBM Storage: FC {#FC.NODE} port {#FC.PORT}: Status'
+              type: DEPENDENT
+              key: 'ibm.storage.fc.status[{#FC.ID}]'
+              history: 30d
+              value_type: CHAR
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.fc_ports[?(@.id=="{#FC.ID}")].status.first()'
+              master_item:
+                key: ibm.storage.get
+              tags:
+                - tag: component
+                  value: fc
+            - uuid: 5523dc5997524b5a82b9eee73ab47416
+              name: 'IBM Storage: FC {#FC.NODE} port {#FC.PORT}: WWPN'
+              type: DEPENDENT
+              key: 'ibm.storage.fc.wwpn[{#FC.ID}]'
+              history: 30d
+              value_type: CHAR
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.fc_ports[?(@.id=="{#FC.ID}")].WWPN.first()'
+              master_item:
+                key: ibm.storage.get
+              tags:
+                - tag: component
+                  value: fc
+          trigger_prototypes:
+            - uuid: bfb18954851d4ab4ac72dd2ad5cea45b
+              expression: 'last(/IBM Storage Monitoring by REST API/ibm.storage.fc.status[{#FC.ID}])<>"active" and last(/IBM Storage Monitoring by REST API/ibm.storage.fc.status[{#FC.ID}])<>"inactive_unconfigured" and last(/IBM Storage Monitoring by REST API/ibm.storage.fc.attachment[{#FC.ID}])<>"none"'
+              name: 'IBM Storage: FC port {#FC.NODE}/{#FC.PORT} is not active'
+              priority: HIGH
+              description: 'Configured/attached FC port is not active. Unconfigured ports are intentionally ignored.'
+              tags:
+                - tag: scope
+                  value: availability
+          master_item:
+            key: ibm.storage.get
+          lld_macro_paths:
+            - lld_macro: '{#FC.ATTACHMENT}'
+              path: $.attachment
+            - lld_macro: '{#FC.ID}'
+              path: $.id
+            - lld_macro: '{#FC.NODE}'
+              path: $.node_name
+            - lld_macro: '{#FC.PORT}'
+              path: $.port_id
+            - lld_macro: '{#FC.WWPN}'
+              path: $.WWPN
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.fc_ports
+        - uuid: f320f7cb45a54ce992926c70687a426c
+          name: 'IBM Storage: Node discovery'
+          type: DEPENDENT
+          key: ibm.storage.node.discovery
+          lifetime: 30d
+          item_prototypes:
+            - uuid: 3cedaba64df94607b57e63259523eed1
+              name: 'IBM Storage: Node {#NODE.NAME}: Configuration node'
+              type: DEPENDENT
+              key: 'ibm.storage.node.config[{#NODE.ID}]'
+              history: 30d
+              value_type: CHAR
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.nodes[?(@.id=="{#NODE.ID}")].config_node.first()'
+              master_item:
+                key: ibm.storage.get
+              tags:
+                - tag: component
+                  value: node
+            - uuid: 4294a642431b4a3ca984d000e5c0df64
+              name: 'IBM Storage: Node {#NODE.NAME}: IO group'
+              type: DEPENDENT
+              key: 'ibm.storage.node.iogroup[{#NODE.ID}]'
+              history: 30d
+              value_type: CHAR
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.nodes[?(@.id=="{#NODE.ID}")].IO_group_name.first()'
+              master_item:
+                key: ibm.storage.get
+              tags:
+                - tag: component
+                  value: node
+            - uuid: 2752c214071d4068bb1610277a5e0999
+              name: 'IBM Storage: Node {#NODE.NAME}: Status'
+              type: DEPENDENT
+              key: 'ibm.storage.node.status[{#NODE.ID}]'
+              history: 30d
+              value_type: CHAR
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.nodes[?(@.id=="{#NODE.ID}")].status.first()'
+              master_item:
+                key: ibm.storage.get
+              tags:
+                - tag: component
+                  value: node
+              trigger_prototypes:
+                - uuid: 848fe23a0dd94467bca56aa557ea45dd
+                  expression: 'last(/IBM Storage Monitoring by REST API/ibm.storage.node.status[{#NODE.ID}])<>"online"'
+                  name: 'IBM Storage: Node {#NODE.NAME} is not online'
+                  priority: HIGH
+                  description: 'The IBM Storage Virtualize node is not reporting status online.'
+                  tags:
+                    - tag: scope
+                      value: availability
+            - uuid: 89842d3b341d4c599574f88dccf8a592
+              name: 'IBM Storage: Node {#NODE.NAME}: WWNN'
+              type: DEPENDENT
+              key: 'ibm.storage.node.wwnn[{#NODE.ID}]'
+              history: 30d
+              value_type: CHAR
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.nodes[?(@.id=="{#NODE.ID}")].WWNN.first()'
+              master_item:
+                key: ibm.storage.get
+              tags:
+                - tag: component
+                  value: node
+          master_item:
+            key: ibm.storage.get
+          lld_macro_paths:
+            - lld_macro: '{#NODE.ID}'
+              path: $.id
+            - lld_macro: '{#NODE.NAME}'
+              path: $.name
+            - lld_macro: '{#NODE.WWNN}'
+              path: $.WWNN
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.nodes
+        - uuid: 20cf416a907d43f6babbb82dee9355de
+          name: 'IBM Storage: Pool discovery'
+          type: DEPENDENT
+          key: ibm.storage.pool.discovery
+          lifetime: 30d
+          item_prototypes:
+            - uuid: 0444c1b1db704976b1df0ff6b697c1d5
+              name: 'IBM Storage: Pool {#POOL.NAME}: Capacity'
+              type: DEPENDENT
+              key: 'ibm.storage.pool.capacity[{#POOL.ID}]'
+              history: 30d
+              units: B
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.pools[?(@.id=="{#POOL.ID}")].capacity.first()'
+                - type: JAVASCRIPT
+                  parameters:
+                    - |
+                      var m = String(value).trim().match(/^([0-9]+(?:\.[0-9]+)?)\s*(B|KB|MB|GB|TB|PB)$/i);
+                      if (!m) {
+                          throw 'Unsupported IBM capacity format: ' + value;
+                      }
+                      var factor = {
+                          B: 1,
+                          KB: 1024,
+                          MB: 1024 * 1024,
+                          GB: 1024 * 1024 * 1024,
+                          TB: 1024 * 1024 * 1024 * 1024,
+                          PB: 1024 * 1024 * 1024 * 1024 * 1024
+                      };
+                      return Math.round(parseFloat(m[1]) * factor[m[2].toUpperCase()]);
+              master_item:
+                key: ibm.storage.get
+              tags:
+                - tag: component
+                  value: pool
+            - uuid: 808682bcc9c8445cb691ada08e2764e7
+              name: 'IBM Storage: Pool {#POOL.NAME}: Free capacity'
+              type: DEPENDENT
+              key: 'ibm.storage.pool.free[{#POOL.ID}]'
+              history: 30d
+              units: B
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.pools[?(@.id=="{#POOL.ID}")].free_capacity.first()'
+                - type: JAVASCRIPT
+                  parameters:
+                    - |
+                      var m = String(value).trim().match(/^([0-9]+(?:\.[0-9]+)?)\s*(B|KB|MB|GB|TB|PB)$/i);
+                      if (!m) {
+                          throw 'Unsupported IBM capacity format: ' + value;
+                      }
+                      var factor = {
+                          B: 1,
+                          KB: 1024,
+                          MB: 1024 * 1024,
+                          GB: 1024 * 1024 * 1024,
+                          TB: 1024 * 1024 * 1024 * 1024,
+                          PB: 1024 * 1024 * 1024 * 1024 * 1024
+                      };
+                      return Math.round(parseFloat(m[1]) * factor[m[2].toUpperCase()]);
+              master_item:
+                key: ibm.storage.get
+              tags:
+                - tag: component
+                  value: pool
+            - uuid: 7cacd4210c824640b4030892f8924b07
+              name: 'IBM Storage: Pool {#POOL.NAME}: Overallocation'
+              type: DEPENDENT
+              key: 'ibm.storage.pool.overallocation[{#POOL.ID}]'
+              history: 30d
+              units: '%'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.pools[?(@.id=="{#POOL.ID}")].overallocation.first()'
+              master_item:
+                key: ibm.storage.get
+              tags:
+                - tag: component
+                  value: pool
+            - uuid: 4b3c1e95f20644ffad894b6c2623462e
+              name: 'IBM Storage: Pool {#POOL.NAME}: Status'
+              type: DEPENDENT
+              key: 'ibm.storage.pool.status[{#POOL.ID}]'
+              history: 30d
+              value_type: CHAR
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.pools[?(@.id=="{#POOL.ID}")].status.first()'
+              master_item:
+                key: ibm.storage.get
+              tags:
+                - tag: component
+                  value: pool
+              trigger_prototypes:
+                - uuid: dfa8859f75654d4fa185511b80536be4
+                  expression: 'last(/IBM Storage Monitoring by REST API/ibm.storage.pool.status[{#POOL.ID}])<>"online"'
+                  name: 'IBM Storage: Pool {#POOL.NAME} is not online'
+                  priority: HIGH
+                  tags:
+                    - tag: scope
+                      value: availability
+            - uuid: 6923efb8f7f14a75975cb0fad8163b76
+              name: 'IBM Storage: Pool {#POOL.NAME}: Used capacity'
+              type: DEPENDENT
+              key: 'ibm.storage.pool.used[{#POOL.ID}]'
+              history: 30d
+              units: B
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.pools[?(@.id=="{#POOL.ID}")].used_capacity.first()'
+                - type: JAVASCRIPT
+                  parameters:
+                    - |
+                      var m = String(value).trim().match(/^([0-9]+(?:\.[0-9]+)?)\s*(B|KB|MB|GB|TB|PB)$/i);
+                      if (!m) {
+                          throw 'Unsupported IBM capacity format: ' + value;
+                      }
+                      var factor = {
+                          B: 1,
+                          KB: 1024,
+                          MB: 1024 * 1024,
+                          GB: 1024 * 1024 * 1024,
+                          TB: 1024 * 1024 * 1024 * 1024,
+                          PB: 1024 * 1024 * 1024 * 1024 * 1024
+                      };
+                      return Math.round(parseFloat(m[1]) * factor[m[2].toUpperCase()]);
+              master_item:
+                key: ibm.storage.get
+              tags:
+                - tag: component
+                  value: pool
+            - uuid: 699da63c89c54fd4a0655debd3d4951d
+              name: 'IBM Storage: Pool {#POOL.NAME}: Utilization'
+              type: CALCULATED
+              key: 'ibm.storage.pool.utilization[{#POOL.ID}]'
+              delay: 5m
+              history: 90d
+              value_type: FLOAT
+              units: '%'
+              params: '100*(last(//ibm.storage.pool.capacity[{#POOL.ID}])-last(//ibm.storage.pool.free[{#POOL.ID}]))/last(//ibm.storage.pool.capacity[{#POOL.ID}])'
+              tags:
+                - tag: component
+                  value: pool
+              trigger_prototypes:
+                - uuid: fec7c35c1d9c46fd98ef1d06774af070
+                  expression: 'last(/IBM Storage Monitoring by REST API/ibm.storage.pool.utilization[{#POOL.ID}])>{$IBM.POOL.UTIL.DISASTER}'
+                  name: 'IBM Storage: Pool {#POOL.NAME} utilization is above {$IBM.POOL.UTIL.DISASTER}%'
+                  priority: DISASTER
+                  tags:
+                    - tag: scope
+                      value: capacity
+                - uuid: ee9c92c0fa4d4f5c85641d114fc5a123
+                  expression: 'last(/IBM Storage Monitoring by REST API/ibm.storage.pool.utilization[{#POOL.ID}])>{$IBM.POOL.UTIL.HIGH} and last(/IBM Storage Monitoring by REST API/ibm.storage.pool.utilization[{#POOL.ID}])<={$IBM.POOL.UTIL.DISASTER}'
+                  name: 'IBM Storage: Pool {#POOL.NAME} utilization is above {$IBM.POOL.UTIL.HIGH}%'
+                  priority: HIGH
+                  tags:
+                    - tag: scope
+                      value: capacity
+                - uuid: 27f7c144fcf24e4d8f140592617a0cb5
+                  expression: 'last(/IBM Storage Monitoring by REST API/ibm.storage.pool.utilization[{#POOL.ID}])>{$IBM.POOL.UTIL.WARN} and last(/IBM Storage Monitoring by REST API/ibm.storage.pool.utilization[{#POOL.ID}])<={$IBM.POOL.UTIL.HIGH}'
+                  name: 'IBM Storage: Pool {#POOL.NAME} utilization is above {$IBM.POOL.UTIL.WARN}%'
+                  priority: WARNING
+                  tags:
+                    - tag: scope
+                      value: capacity
+          master_item:
+            key: ibm.storage.get
+          lld_macro_paths:
+            - lld_macro: '{#POOL.ID}'
+              path: $.id
+            - lld_macro: '{#POOL.NAME}'
+              path: $.name
+            - lld_macro: '{#POOL.TYPE}'
+              path: $.type
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.pools
+      tags:
+        - tag: class
+          value: storage
+        - tag: target
+          value: ibm
+      macros:
+        - macro: '{$IBM.API.PASSWORD}'
+          type: SECRET_TEXT
+          description: 'REST API password.'
+        - macro: '{$IBM.API.TIMEOUT}'
+          value: 30s
+          description: 'Timeout of the master Script item.'
+        - macro: '{$IBM.API.URL}'
+          value: 'https://{HOST.CONN}:7443/rest'
+          description: 'Base URL of the classic IBM Storage Virtualize REST API.'
+        - macro: '{$IBM.API.USER}'
+          value: admin
+          description: 'REST API user. Replace with a restricted monitoring user.'
+        - macro: '{$IBM.POOL.UTIL.DISASTER}'
+          value: '95'
+          description: 'Pool utilization disaster threshold, percent.'
+        - macro: '{$IBM.POOL.UTIL.HIGH}'
+          value: '90'
+          description: 'Pool utilization high threshold, percent.'
+        - macro: '{$IBM.POOL.UTIL.WARN}'
+          value: '80'
+          description: 'Pool utilization warning threshold, percent.'
