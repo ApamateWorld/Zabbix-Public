@@ -29,4 +29,8 @@ The catalog will grow as more templates and documentation are contributed. Compa
 
 Use Issues for problems and suggestions, or submit a pull request. Include the Zabbix version, device model, firmware, reproduction steps and sanitized errors. Remove credentials, tokens, internal addresses and identifying device data from examples.
 
-This is a community project, not an official IBM or Zabbix integration. A redistribution license has not yet been selected; public availability alone does not grant an open-source license.
+This is a community project, not an official IBM or Zabbix integration. 
+
+## License
+
+The templates and documentation in this repository are available under the [MIT License](LICENSE). Copyright (c) 2026 Apamate.
