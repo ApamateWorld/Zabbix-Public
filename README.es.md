@@ -29,4 +29,8 @@ El catálogo crecerá con nuevas plantillas y documentación. No está confirmad
 
 Puedes reportar problemas o sugerencias mediante Issues y proponer cambios mediante pull requests. Incluye versión de Zabbix, modelo, firmware, pasos para reproducir y errores anonimizados. Retira credenciales, tokens, direcciones internas y datos identificativos de los equipos.
 
-Proyecto comunitario; no es una integración oficial de IBM ni de Zabbix. La licencia de redistribución está pendiente de selección: la visibilidad pública por sí sola no concede una licencia de código abierto.
+Proyecto comunitario; no es una integración oficial de IBM ni de Zabbix. 
+
+## Licencia
+
+Las plantillas y la documentación de este repositorio están disponibles bajo la [licencia MIT](LICENSE). Copyright (c) 2026 Apamate.
